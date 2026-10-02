@@ -35,10 +35,16 @@ from ..logger import get_logger
 from ..media.buffer import PcmRingBuffer
 from ..media.ffmpeg import FFmpegProcess
 from ..media.metadata import MediaInfo, probe_media_info
+from ..media.saavn import is_saavn_source, resolve_saavn
 from ..media.source import validate_source
 from ..media.video_ffmpeg import FFmpegVideoProcess
 from ..media.volume import apply_gain, percent_to_gain
-from ..media.youtube import is_ytdlp_url, resolve_url
+from ..media.youtube import (
+    is_youtube_query,
+    is_ytdlp_url,
+    resolve_url,
+    search_aytube,
+)
 from ..transport.track import PcmStreamTrack
 from ..transport.video import H264StreamTrack
 from ..types import (
@@ -222,15 +228,35 @@ class Player:
             if self._closed:
                 raise AytgcallsError("Player is closed")
             if source is not None:
-                track = validate_source(source)
+                if isinstance(source, str) and is_saavn_source(source):
+                    resolved_saavn = await resolve_saavn(source)
+                    if resolved_saavn is not None:
+                        track = resolved_saavn
+                    else:
+                        track = validate_source(source)
+                elif isinstance(source, str) and is_youtube_query(source):
+                    resolved_yt = await search_aytube(source)
+                    if resolved_yt is not None:
+                        track = resolved_yt
+                        logger.info("Resolved via aytube search: %s", track.display_name)
+                    else:
+                        track = validate_source(source)
+                else:
+                    track = validate_source(source)
+                    if track.kind is SourceKind.URL and is_saavn_source(track.uri):
+                        resolved_saavn = await resolve_saavn(track.uri)
+                        if resolved_saavn is not None:
+                            track = resolved_saavn
+
                 if (
                     track.kind is SourceKind.URL
                     and is_ytdlp_url(track.uri)
+                    and not is_saavn_source(track.uri)
                 ):
                     resolved = await resolve_url(track.uri)
                     if resolved is not None:
                         track = resolved
-                        logger.info("Resolved via yt-dlp: %s", track.display_name)
+                        logger.info("Resolved stream: %s", track.display_name)
                 if not replace and self.state.is_active:
                     await self.queue.add(track)
                     logger.info("Queued %s", track.display_name)

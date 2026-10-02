@@ -17,7 +17,7 @@ import pytest
 pyrogram = pytest.importorskip("pyrogram", reason="kurigram is not installed")
 raw = pyrogram.raw
 
-from aytgcalls import AyCall, AyClient, AyConfig, AyFac, AyLoop  # noqa: E402
+from aytgcalls import AyCall, AyConfig, AyFac, AyLoop  # noqa: E402
 from aytgcalls.exceptions import InvalidAudioSource, NotJoined  # noqa: E402
 from aytgcalls.media.telegram import (  # noqa: E402
     TelegramDownloader,

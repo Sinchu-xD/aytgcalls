@@ -1,14 +1,13 @@
-"""YouTube (and yt-dlp supported sites) URL resolution via YouTubeMusic.
+"""YouTube (and yt-dlp supported sites) stream resolution with aytube and YouTubeMusic.
 
-When ``YouTubeMusic`` is installed, URLs are resolved to a direct audio stream URL
-that FFmpeg can decode.  The ``YouTubeMusic`` package wraps yt-dlp with the correct
-format selectors so it always returns a direct playable URL (never an HLS/DASH manifest).
-
-Without YouTubeMusic, plain http/https URLs pass through unchanged.
+Prioritizes the high-performance ``aytube`` package (developed by Abhishek Thakur) for
+instant, pure-Python stream extraction without yt-dlp binary overhead.
+Falls back to ``YouTubeMusic`` (yt-dlp) if needed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -20,9 +19,18 @@ from ..types import AudioSource, SourceKind
 
 logger = logging.getLogger("media.youtube")
 
-__all__ = ["resolve_url", "is_youtube_url", "is_ytdlp_url", "YOUTUBE_MUSIC_AVAILABLE"]
+__all__ = [
+    "resolve_url",
+    "resolve_aytube",
+    "search_aytube",
+    "is_youtube_url",
+    "is_ytdlp_url",
+    "is_youtube_query",
+    "AYTUBE_AVAILABLE",
+    "YOUTUBE_MUSIC_AVAILABLE",
+]
 
-#: Well-known domains that YouTubeMusic / yt-dlp can handle.
+#: Well-known domains that aytube / YouTubeMusic / yt-dlp can handle.
 _YT_DOMAINS: frozenset[str] = frozenset(
     {
         "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be",
@@ -40,25 +48,46 @@ _YT_DOMAINS: frozenset[str] = frozenset(
         "reddit.com", "www.reddit.com", "v.redd.it",
         "streamtape.com", "streamsb.net", "dood.to", "dood.watch",
         "mixdrop.co", "upstream.to",
+        "jiosaavn.com", "www.jiosaavn.com", "saavn.com", "www.saavn.com",
     }
 )
 
 
 def _cookie_path() -> str | None:
-    """Return a cookie file path if one exists at the standard temp location."""
-    path = os.path.join(tempfile.gettempdir(), "aytgcalls_cookies.txt")
-    if os.path.isfile(path) and os.path.getsize(path) > 0:
-        return path
+    """Return a cookie file path if one exists."""
+    candidates = [
+        os.environ.get("AYTG_COOKIES_FILE", ""),
+        os.environ.get("YOUTUBE_COOKIES_FILE", ""),
+        os.environ.get("AYTUBE_COOKIES_FILE", ""),
+        os.path.join(os.getcwd(), "cookies.txt"),
+        os.path.join(os.getcwd(), "cookies_file"),
+        os.path.expanduser("~/.config/aytube/cookies_file"),
+        os.path.expanduser("~/.config/aytube/cookies.txt"),
+        os.path.join(tempfile.gettempdir(), "aytgcalls_cookies.txt"),
+        "/home/ubuntu/YouTubeMusic/cookies.txt",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
     return None
 
 
+def AYTUBE_AVAILABLE() -> bool:
+    """Return True if the aytube package is installed."""
+    try:
+        import aytube  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def YOUTUBE_MUSIC_AVAILABLE() -> bool:
-    """Return True if the ``YouTubeMusic`` package is installed."""
+    """Return True if the YouTubeMusic package or yt-dlp binary is available."""
     return shutil.which("yt-dlp") is not None
 
 
 def is_youtube_url(url: str) -> bool:
-    """Return True if the URL looks like a site YouTubeMusic can handle."""
+    """Return True if the URL looks like a site aytube or YouTubeMusic can handle."""
     try:
         host = urlparse(url).netloc.lower()
         host = host.split(":")[0].removeprefix("www.")
@@ -71,13 +100,97 @@ def is_youtube_url(url: str) -> bool:
 is_ytdlp_url = is_youtube_url
 
 
+def is_youtube_query(source: str) -> bool:
+    """Return True if source is a YouTube search prefix like 'yt:...' or 'youtube:...'."""
+    if not isinstance(source, str):
+        return False
+    lower = source.lower()
+    return lower.startswith("yt:") or lower.startswith("youtube:")
+
+
+async def resolve_aytube(url: str, *, audio_only: bool = True) -> AudioSource | None:
+    """Extract a direct stream using the aytube package."""
+    if not AYTUBE_AVAILABLE():
+        return None
+
+    import aytube
+
+    cookies = _cookie_path()
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: aytube.get_stream_url(url, audio_only=audio_only, cookies_file=cookies),
+        )
+        if not result or not result.url:
+            return None
+
+        # Reject HLS/DASH manifests
+        parsed = urlparse(result.url)
+        if parsed.path.endswith((".m3u8", ".mpd")):
+            return None
+
+        logger.info("Resolved via aytube: %r -> %s", url, result.title)
+        return AudioSource(
+            uri=result.url,
+            kind=SourceKind.URL,
+            title=result.title or None,
+            start_at=0.0,
+            byte_offset=0,
+        )
+    except Exception as exc:
+        logger.debug("aytube failed to resolve %r: %s", url, exc)
+        return None
+
+
+async def search_aytube(query: str, *, audio_only: bool = True) -> AudioSource | None:
+    """Search YouTube via aytube and resolve the top result."""
+    if not AYTUBE_AVAILABLE():
+        return None
+
+    import aytube
+
+    clean_query = query
+    for prefix in ("yt:", "youtube:", "YT:", "YOUTUBE:"):
+        if clean_query.startswith(prefix):
+            clean_query = clean_query[len(prefix):].strip()
+            break
+
+    loop = asyncio.get_running_loop()
+    try:
+        results = await loop.run_in_executor(None, aytube.search, clean_query)
+        if not results:
+            logger.warning("aytube search returned no results for %r", clean_query)
+            return None
+
+        top = results[0]
+        url = top.get("url") or f"https://www.youtube.com/watch?v={top.get('video_id')}"
+        title = top.get("title")
+        source = await resolve_aytube(url, audio_only=audio_only)
+        if source is None:
+            source = await resolve_url(url)
+        if source and title:
+            from dataclasses import replace
+            return replace(source, title=title)
+        return source
+    except Exception as exc:
+        logger.warning("aytube search failed for %r: %s", clean_query, exc)
+        return None
+
+
 async def resolve_url(url: str) -> AudioSource | None:
     """Resolve a YouTube / streaming URL to a direct playable source.
 
-    Uses the ``YouTubeMusic`` package (which wraps yt-dlp) to get a direct
-    audio stream URL.  Returns ``None`` if ``yt-dlp`` is not available
-    (caller should fall back to the original URL).
+    Prioritizes ``aytube`` for YouTube domains, falling back to ``YouTubeMusic`` (yt-dlp).
     """
+    # 1. Try aytube first for YouTube URLs
+    is_yt = any(d in url.lower() for d in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
+    if is_yt and AYTUBE_AVAILABLE():
+        source = await resolve_aytube(url, audio_only=True)
+        if source is not None:
+            return source
+
+    # 2. Fallback to YouTubeMusic (yt-dlp)
     if not YOUTUBE_MUSIC_AVAILABLE():
         logger.debug("yt-dlp not available; cannot resolve %r", url)
         return None
@@ -95,7 +208,7 @@ async def resolve_url(url: str) -> AudioSource | None:
         ) from exc
 
     if not direct_url:
-        logger.error("YouTubeMusic returned no stream URL for %r — cannot fall back to original URL (may be an HLS manifest)", url)
+        logger.error("YouTubeMusic returned no stream URL for %r — cannot fall back to original URL", url)
         raise MediaSourceError(
             f"YouTubeMusic returned no stream URL for {url!r}. "
             "The track may be geo-restricted, age-restricted, or unavailable."
@@ -109,12 +222,12 @@ async def resolve_url(url: str) -> AudioSource | None:
             f"Resolved URL is an HLS/DASH manifest, not a direct audio stream: {direct_url}"
         )
 
-    logger.info("Resolved %r -> direct videoplayback URL (%s)", url, parsed.hostname)
+    logger.info("Resolved via YouTubeMusic %r -> direct videoplayback URL (%s)", url, parsed.hostname)
 
     return AudioSource(
         uri=direct_url,
         kind=SourceKind.URL,
-        title=None,          # title is not available from get_stream
+        title=None,
         start_at=0.0,
         byte_offset=0,
     )

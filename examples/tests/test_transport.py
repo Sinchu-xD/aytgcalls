@@ -146,3 +146,41 @@ async def test_ice_failure_is_reported_not_hidden(telegram_join_response: dict) 
             )
     finally:
         await transport.close()
+
+
+async def test_h264_stream_track_black_frame() -> None:
+    from aytgcalls.transport.video import H264StreamTrack
+
+    track = H264StreamTrack(width=640, height=360, fps=30)
+    frame = await track.recv()
+    assert frame.width == 640
+    assert frame.height == 360
+    assert track.stats.frames_silence == 1
+    track.stop()
+
+
+async def test_h264_stream_track_decodes_nal_units() -> None:
+    import subprocess
+    from aytgcalls.transport.video import H264StreamTrack
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "testsrc=duration=1:size=320x240:rate=30",
+        "-c:v", "libx264", "-f", "h264", "-",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    raw_h264, _ = proc.communicate()
+    assert raw_h264
+
+    feed = [raw_h264]
+
+    async def provider() -> bytes | None:
+        return feed.pop(0) if feed else None
+
+    track = H264StreamTrack(provider=provider, fps=30)
+    frame = await track.recv()
+    assert frame.width == 320
+    assert frame.height == 240
+    assert track.stats.frames_encoded >= 1
+    track.stop()
+

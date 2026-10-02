@@ -8,6 +8,7 @@ aiortc's :class:`RTCRtpSender` then re-encodes into H.264 RTP packets.
 from __future__ import annotations
 
 import asyncio
+import collections
 import time
 from collections.abc import Awaitable, Callable
 from fractions import Fraction
@@ -66,14 +67,14 @@ class H264StreamTrack(MediaStreamTrack):
 
         # Decoder context (lazily created on first frame).
         self._codec_ctx: "CodecContext | None" = None
-        #: Pending NAL units not yet flushed through the decoder.
-        self._nal_buffer: bytes = b""
+        self._frame_queue: collections.deque[VideoFrame] = collections.deque()
 
     # -- wiring -------------------------------------------------------------------
 
     def set_provider(self, provider: VideoFrameProvider | None) -> None:
         """Swap the NAL-unit source (used when the player starts/stops)."""
         self._provider = provider
+        self._frame_queue.clear()
 
     @property
     def stats(self) -> CallStats:
@@ -111,23 +112,18 @@ class H264StreamTrack(MediaStreamTrack):
         self._ensure_codec()
         assert self._codec_ctx is not None
 
-        # Append to any leftover from the previous call.
-        self._nal_buffer += data
         try:
-            frames = self._codec_ctx.decode(self._nal_buffer)
+            packets = self._codec_ctx.parse(data)
         except Exception:
-            # If the buffer has incomplete NAL units, keep them for next time.
             return []
-        finally:
-            # Retain only unparsed tail bytes.
-            if hasattr(self._codec_ctx, "parser") and self._codec_ctx.parser is not None:
-                pass  # parser handles internal buffering
-            else:
-                self._nal_buffer = b""
 
         decoded: list[VideoFrame] = []
-        for packet in frames:
-            for frame in packet.decode():
+        for packet in packets:
+            try:
+                frames = self._codec_ctx.decode(packet)  # type: ignore[attr-defined]
+            except Exception:
+                continue
+            for frame in frames:
                 frame.pts = self._pts
                 frame.time_base = _TIME_BASE
                 self._pts += self._pts_step
@@ -142,24 +138,28 @@ class H264StreamTrack(MediaStreamTrack):
 
         await self._pace()
 
-        frames: list[VideoFrame] = []
-        if self._provider is not None:
+        if not self._frame_queue and self._provider is not None:
             try:
-                nalus = await self._provider()
-                if nalus:
-                    frames = self._decode_nalus(nalus)
+                # Read NAL units until at least one frame is decoded or stream ends.
+                for _ in range(15):
+                    nalus = await self._provider()
+                    if not nalus:
+                        break
+                    decoded = self._decode_nalus(nalus)
+                    if decoded:
+                        self._frame_queue.extend(decoded)
+                        break
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Video frame provider raised; emitting black frame")
 
-        if not frames:
-            frames = [self._black_frame()]
-            self._stats.frames_silence += 1
-        else:
-            self._stats.frames_encoded += len(frames)
+        if self._frame_queue:
+            self._stats.frames_encoded += 1
+            return self._frame_queue.popleft()
 
-        return frames[0]
+        self._stats.frames_silence += 1
+        return self._black_frame()
 
     def _black_frame(self) -> "VideoFrame":
         from av import VideoFrame
@@ -174,5 +174,5 @@ class H264StreamTrack(MediaStreamTrack):
         self._closed = True
         self._provider = None
         self._codec_ctx = None
-        self._nal_buffer = b""
+        self._frame_queue.clear()
         super().stop()

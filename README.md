@@ -23,7 +23,14 @@ from aytgcalls import AyClient, AyCreds
 client = AyClient(AyCreds.from_env())
 await client.start()
 
-await client.play(-1001234567890, "song.mp3")    # auto-join + play
+# 🎵 Play local files, direct YouTube search, JioSaavn or live stream URLs
+await client.play(-1001234567890, "song.mp3")                       # local audio
+await client.play(-1001234567890, "yt:Alone Alan Walker")          # Instant YouTube search via aytube
+await client.play(-1001234567890, "saavn:Kesariya")                # JioSaavn 320kbps via SaavnAPI
+await client.play(-1001234567890, "https://youtu.be/1-xGerv5FOk")  # Direct YouTube URL
+
+await client.pause(-1001234567890)
+await client.resume(-1001234567890)
 await client.skip(-1001234567890)
 await client.end(-1001234567890)
 await client.stop()
@@ -40,6 +47,7 @@ Every action takes `chat_id` first — one client, many voice chats.
 - [Why you need two accounts](#why-you-need-two-accounts)
 - [Installation](#installation)
 - [Generating a STRING_SESSION](#generating-a-string_session)
+- [YouTube & JioSaavn Streaming](#youtube--jiosaavn-streaming)
 - [Quick start](#quick-start)
 - [Three usage styles](#three-usage-styles)
   - [AyClient — one class, everything](#ayclient--one-class-everything)
@@ -62,17 +70,18 @@ Every action takes `chat_id` first — one client, many voice chats.
 
 ## Features
 
-- 🎵 **Stream any audio format** FFmpeg understands — MP3, FLAC, OGG/Opus, WAV, AAC, M4A, MOV, MKV, remote HTTP(S) streams, Telegram voice notes, YouTube / SoundCloud / Vimeo / Twitch (via the optional `yt-dlp` integration)
-- 🎬 **Video / screen sharing** via H.264 on a presentation SSRC
-- ⏯ **Full playback control** — play, pause, resume, skip, previous, replay, stop, seek, forward, rewind, loop (track / queue / shuffle / count)
-- 📜 **Near-gapless transitions** — the next track starts the moment the previous one hits EOF, so the 20 ms RTP cadence never breaks
-- 🧠 **Smart seeking** — byte-offset seeks for self-framing formats (MP3, AAC, ADTS, AC3), FFmpeg `-ss` for header-dependent ones (WAV, FLAC, OGG, MP4), live streams are refused with a clear error
-- 🪄 **One-call automation** — `play()` auto-joins, auto-queues, the call auto-leaves when the queue empties (with a configurable grace period)
-- 🔁 **Auto-reconnect** with exponential backoff when the SFU drops you
-- 🔇 **Server-side mute / unmute / volume** through `phone.editGroupCallParticipant`
-- 👥 **List participants**, rename the voice chat, query live RTP / ICE / DTLS stats
-- 🧹 **JSON ⇄ SDP bridge** (both directions, round-trip tested) for anyone who wants the SDP view
-- 🪶 **Lazy imports** — aiortc and Kurigram only load when you actually need them, so unit tests don't drag them in
+- 🚀 **Native `aytube` YouTube Engine** — Lightning fast, pure-Python stream extractor and search resolver with instant audio playback (`yt:<query>` or direct YouTube URLs). Zero yt-dlp overhead!
+- 🎶 **Native `SaavnAPI` (JioSaavn) Engine** — Direct lossless 320kbps stream extraction with `saavn:<query>` or JioSaavn URLs.
+- 🎵 **Stream any audio format** FFmpeg understands — MP3, FLAC, OGG/Opus, WAV, AAC, M4A, MOV, MKV, remote HTTP(S) streams, Telegram voice notes, radio feeds.
+- 🎬 **Video & screen sharing** via crisp H.264 on presentation SSRC.
+- ⏯ **Full playback control** — play, pause, resume, skip, previous, replay, stop, seek, forward, rewind, loop (track / queue / shuffle / count).
+- 📜 **Near-gapless transitions** — the next track starts the moment the previous one hits EOF, maintaining the strict 20 ms WebRTC cadence.
+- 🧠 **Smart seeking & volume** — byte-offset seeks for self-framing formats, FFmpeg `-ss` for header-dependent ones, digital software volume control (0%–200%).
+- 🪄 **One-call automation** — `play()` auto-joins, auto-queues, and auto-leaves when the queue empties.
+- 🔁 **Auto-reconnect** with exponential backoff on SFU disconnects.
+- 🔇 **Server-side controls** — mute, unmute, volume through Telegram MTProto signaling.
+- 👥 **Participant inspection** — query live WebRTC RTP / ICE / DTLS stats.
+- 🪶 **Zero bloat & pure Python WebRTC** — built on modern `aiortc` and `kurigram`, completely eliminating `py-tgcalls` segfaults and C++ compilation nightmares.
 
 ## How it works
 
@@ -127,10 +136,10 @@ pip uninstall -y pyrogram pyrofork tgcalls py-tgcalls pytgcalls
 pip install -U kurigram aytgcalls
 ```
 
-Recommended speedup:
+Recommended installation (with ultra-fast engines + tgcrypto):
 
 ```bash
-pip install "aytgcalls[fast]"     # adds tgcrypto
+pip install "aytgcalls[all]"     # installs tgcrypto + aytube + SaavnAPI
 ```
 
 Sanity-check the install:
@@ -193,8 +202,36 @@ Log in with the **phone number of a normal account** (not a bot). The script pri
 session string once.
 
 > **Treat `STRING_SESSION` like a password.** Anyone with it has full access to that
-> account. Keep it in an environment variable or a secret manager. AyCalls never
-> hardcodes credentials and never logs them.
+## YouTube & JioSaavn Streaming
+
+AyCalls features built-in high-performance music streaming engines with zero manual configuration required:
+
+### 1. YouTube via `aytube`
+Powered by the ultra-fast, pure-Python [`aytube`](https://pypi.org/project/aytube/) library. It extracts direct GoogleVideo audio streams and performs searches in milliseconds without heavy binary overhead:
+
+```python
+# Instant YouTube search & stream
+await client.play(chat_id, "yt:Alone Alan Walker")
+await client.play(chat_id, "youtube:Starboy The Weeknd")
+
+# Direct YouTube URLs (standard or shortened)
+await client.play(chat_id, "https://www.youtube.com/watch?v=1-xGerv5FOk")
+await client.play(chat_id, "https://youtu.be/1-xGerv5FOk")
+```
+
+### 2. JioSaavn via `SaavnAPI`
+Powered by [`SaavnAPI`](https://pypi.org/project/SaavnAPI/) for studio-grade 320 kbps AAC/M4A streams:
+
+```python
+# Direct JioSaavn search & play
+await client.play(chat_id, "saavn:Kesariya")
+await client.play(chat_id, "saavn:Tum Hi Ho")
+
+# Direct JioSaavn song URLs
+await client.play(chat_id, "https://www.jiosaavn.com/song/tum-hi-ho/BgwicBdfAQU")
+```
+
+---
 
 ## Quick start
 

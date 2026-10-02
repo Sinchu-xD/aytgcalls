@@ -12,11 +12,12 @@ import contextlib
 import shlex
 from typing import TYPE_CHECKING
 
+from ..exceptions import FFmpegError, FFmpegNotInstalled
 from ..logger import get_logger
 from ..types import AudioSource, SourceKind
 
 if TYPE_CHECKING:
-    pass
+    from .http import HttpStreamReader
 
 logger = get_logger("media.video_ffmpeg")
 
@@ -100,7 +101,7 @@ class FFmpegVideoProcess:
         self._stderr: collections.deque[str] = collections.deque(maxlen=40)
         self._stderr_task: asyncio.Task[None] | None = None
         self._pump_task: asyncio.Task[None] | None = None
-        self._reader: object | None = None
+        self._reader: HttpStreamReader | None = None
         self._pump_error: BaseException | None = None
         self._eof = False
 
@@ -136,7 +137,6 @@ class FFmpegVideoProcess:
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError as exc:
-            from ..exceptions import FFmpegNotInstalled
             raise FFmpegNotInstalled(self.binary) from exc
         except OSError as exc:
             raise RuntimeError(f"Could not start ffmpeg: {exc}") from exc
@@ -162,7 +162,7 @@ class FFmpegVideoProcess:
             logger.debug("stderr drain ended: %s", exc)
 
     async def _pump_stdin(self) -> None:
-        assert self._process is not None and self._process.stdin is not None
+        assert self._process is not None and self._process.stdin is not None and self._reader is not None
         stdin = self._process.stdin
         try:
             async for chunk in self._reader.iter_chunks():
@@ -231,7 +231,7 @@ class FFmpegVideoProcess:
             await asyncio.wait_for(self._process.wait(), timeout=2)
         code = self._process.returncode
         if code not in (0, None, -9, -15):
-            raise RuntimeError(
+            raise FFmpegError(
                 f"ffmpeg failed while decoding {self.source.display_name!r}",
                 returncode=code,
                 stderr=self.stderr_text,

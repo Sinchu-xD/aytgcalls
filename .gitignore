@@ -12,3 +12,8 @@ venv/
 *.session-journal
 .env
 _creds.env
+cookies.txt
+interactive_login.py
+session_tool.py
+test_live_aytube.py
+

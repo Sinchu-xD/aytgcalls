@@ -82,7 +82,12 @@ async def main() -> int:
     # 1. Validate the URL first — a dead link must not look like a transport bug.
     print(f"\n-> probing audio URL with FFmpeg: {url}")
     try:
-        await probe_source(validate_source(url))
+        from aytgcalls.media.youtube import is_ytdlp_url, resolve_url
+
+        src = await resolve_url(url) if is_ytdlp_url(url) else validate_source(url)
+        if src is None:
+            src = validate_source(url)
+        await probe_source(src, http_fetch=False)
     except AytgcallsError as exc:
         fail(f"URL is not playable: {exc}")
     print("[OK] FFmpeg decoded audio from the URL")

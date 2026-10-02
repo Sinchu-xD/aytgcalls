@@ -24,7 +24,7 @@ _INT16_MAX = 32767
 try:
     import numpy as _np
 except ImportError:
-    _np = None
+    _np = None  # type: ignore[assignment]
 
 
 def percent_to_gain(percent: float) -> float:

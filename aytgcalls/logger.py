@@ -51,7 +51,7 @@ def enable_debug(*, level: int = logging.DEBUG, stream: Any = None) -> logging.L
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
         )
-        handler._aytgcalls = True
+        handler._aytgcalls = True  # type: ignore[attr-defined]
         logger.addHandler(handler)
     return logger
 

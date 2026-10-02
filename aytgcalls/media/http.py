@@ -16,6 +16,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import aiohttp
 
 from ..exceptions import MediaSourceError
 from ..logger import get_logger
@@ -53,12 +57,12 @@ class HttpStreamReader:
         self.retry_delay = retry_delay
         self.bytes_read = self.start_offset
         self.retries_used = 0
-        self._session: object | None = None
+        self._session: aiohttp.ClientSession | None = None
         self._closed = False
 
     # -- lifecycle ---------------------------------------------------------------------
 
-    async def _ensure_session(self) -> object:
+    async def _ensure_session(self) -> aiohttp.ClientSession:
         import aiohttp
 
         if self._session is None:
@@ -143,7 +147,7 @@ class HttpStreamReader:
                 await asyncio.sleep(self.retry_delay * attempt)
 
     @staticmethod
-    async def _discard(response: object, count: int) -> None:
+    async def _discard(response: aiohttp.ClientResponse, count: int) -> None:
         remaining = count
         content = response.content
         while remaining > 0:
