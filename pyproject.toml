@@ -79,9 +79,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Sinchu-xD/AyCalls"
-Documentation = "https://github.com/Sinchu-xD/AyCalls#readme"
-Issues = "https://github.com/Sinchu-xD/AyCalls/issues"
+Homepage = "https://github.com/Sinchu-xD/aytgcalls"
+Documentation = "https://github.com/Sinchu-xD/aytgcalls#readme"
+Issues = "https://github.com/Sinchu-xD/aytgcalls/issues"
 
 [tool.setuptools.packages.find]
 include = ["aytgcalls*"]

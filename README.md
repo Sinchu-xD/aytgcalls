@@ -660,8 +660,8 @@ Deliberately not implemented:
 ## Development
 
 ```bash
-git clone https://github.com/Sinchu-xD/AyCalls.git
-cd AyCalls
+git clone https://github.com/Sinchu-xD/aytgcalls.git
+cd aytgcalls
 pip install -e ".[dev]"
 pytest -q          # 274 tests, no network required
 ruff check .
